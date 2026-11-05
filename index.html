@@ -1,0 +1,1120 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bouncy Star</title>
+<style>
+  :root {
+    --bg: #0a0d20;
+    --panel: rgba(20, 25, 56, 0.94);
+    --text: #eef1ff;
+    --muted: #a3abd6;
+    --accent: #ffd166;
+    --accent-ink: #2b2000;
+    --line: #34407a;
+    --danger: #ff4d6d;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+  }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+    /* 왜: 모바일에서 터치로 조작할 때 화면이 스크롤·확대되지 않게 */
+    touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  /* 왜: 16:9 비율을 유지하면서 화면에 들어가는 가장 큰 크기로 (가로·세로 모두 잘리지 않게) */
+  #stage {
+    position: relative;
+    width: min(100vw, calc(100vh * 16 / 9));
+    width: min(100vw, calc(100dvh * 16 / 9));
+    aspect-ratio: 16 / 9;
+    container-type: size;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  .overlay {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(6, 8, 22, 0.55);
+    font-size: clamp(12px, 1.9cqw, 20px);
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 1.2em;
+    padding: 1.6em 2em;
+    text-align: center;
+    max-width: 92%;
+    max-height: 92%;
+    overflow: auto;
+  }
+  .panel h1 { margin: 0 0 0.2em; font-size: 3em; letter-spacing: 0.02em; color: var(--accent); }
+  .panel h2 { margin: 0 0 0.5em; font-size: 1.8em; }
+  .panel p { margin: 0.4em 0; color: var(--muted); line-height: 1.5; }
+  .row { display: flex; gap: 0.6em; justify-content: center; flex-wrap: wrap; margin-top: 1.1em; }
+  button {
+    font: inherit; color: var(--text);
+    background: #26305f; border: 1px solid var(--line);
+    border-radius: 0.7em; padding: 0.6em 1.2em;
+    cursor: pointer;
+  }
+  button:hover { background: #303c75; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+  button.primary:hover { background: #ffdc85; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.6em; margin-top: 0.8em; }
+  .grid button { padding: 0.7em 0.4em; min-width: 6.5em; }
+  .grid .num { display: block; font-size: 1.4em; font-weight: 700; }
+  .grid .name { display: block; font-size: 0.75em; color: var(--muted); margin-top: 0.2em; }
+  .grid .cleared { border-color: var(--accent); }
+  .keys { font-size: 0.85em; }
+  kbd { background: #26305f; border: 1px solid var(--line); border-radius: 0.3em; padding: 0 0.35em; font-family: inherit; }
+
+  #corner {
+    position: absolute; top: 0.4cqh; right: 0.6cqw;
+    display: flex; gap: 0.4em;
+    font-size: clamp(12px, 1.6cqw, 18px);
+  }
+  #corner button { padding: 0.25em 0.7em; background: rgba(38, 48, 95, 0.8); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="game" aria-label="Bouncy Star 게임 화면"></canvas>
+
+  <div id="corner" hidden>
+    <button id="btn-pause" aria-label="일시정지">❚❚</button>
+    <button id="btn-mute" aria-label="소리 끄기">♪</button>
+  </div>
+
+  <section class="overlay" id="screen-title">
+    <div class="panel">
+      <h1>Bouncy Star</h1>
+      <p>공은 저절로 튀어요. 좌우로만 움직여서 별을 모두 모으세요.</p>
+      <div class="row">
+        <button class="primary" id="btn-start">시작</button>
+        <button id="btn-open-select">스테이지 선택</button>
+      </div>
+      <p class="keys"><kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>D</kbd> 이동 · <kbd>R</kbd> 다시 · <kbd>Esc</kbd> 일시정지 · <kbd>M</kbd> 소리<br>모바일: 화면 왼쪽·오른쪽 절반을 누르기</p>
+    </div>
+  </section>
+
+  <section class="overlay" id="screen-select" hidden>
+    <div class="panel">
+      <h2>스테이지 선택</h2>
+      <div class="grid" id="stage-grid"></div>
+      <div class="row"><button id="btn-select-back">뒤로</button></div>
+    </div>
+  </section>
+
+  <section class="overlay" id="screen-pause" hidden>
+    <div class="panel">
+      <h2>일시정지</h2>
+      <div class="row">
+        <button class="primary" id="btn-resume">계속하기</button>
+        <button id="btn-pause-restart">다시 시작</button>
+        <button id="btn-pause-select">스테이지 선택</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="overlay" id="screen-clear" hidden>
+    <div class="panel">
+      <h2 id="clear-title">클리어!</h2>
+      <p id="clear-detail"></p>
+      <div class="row">
+        <button class="primary" id="btn-next">다음 스테이지</button>
+        <button id="btn-retry">다시 하기</button>
+        <button id="btn-clear-select">스테이지 선택</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="overlay" id="screen-end" hidden>
+    <div class="panel">
+      <h1>모든 별을 모았어요!</h1>
+      <p id="end-detail"></p>
+      <div class="row">
+        <button class="primary" id="btn-end-select">스테이지 선택</button>
+        <button id="btn-end-title">처음으로</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+'use strict';
+// ==SIM START==
+// ↑↓ 이 구간(상수·스테이지·Level·Ball·충돌)은 DOM을 전혀 쓰지 않는다.
+// 왜: tools/verify-stages.js가 이 구간만 잘라 Node에서 돌려서
+//     "모든 별을 실제로 먹을 수 있는지"를 자동으로 검증하기 때문.
+
+/* ───────── 1. 상수 ───────── */
+// 물리 값은 여기 한 곳에서만 바꾼다 (명세서 규칙 4).
+const PHYS = {
+  GRAVITY: 0.45,     // 매 프레임 아래로 더해지는 속도
+  BOUNCE_V: -11,     // 기본 블록 튀는 속도 → 최대 높이 11²/(2×0.45) ≈ 134px ≈ 3.4칸
+  JUMP_V: -15,       // 점프 블록 → ≈ 250px ≈ 6.2칸
+  MOVE_ACC: 0.6,     // 좌우 가속
+  MAX_VX: 4.2,       // 좌우 최고 속도
+  FRICTION: 0.85,    // 키를 뗐을 때 감속 비율
+  BALL_R: 10,        // 공 반지름
+  MAX_FALL: 16,      // 낙하 최고 속도 (너무 빨라지면 조작감이 나빠져서 제한)
+  DASH_V: 9,         // 대시 블록 속도 (벽에 닿을 때까지 수평으로 날아감)
+  CRUMBLE_DELAY: 8,  // 깨지는 블록이 밟힌 뒤 사라지기까지 프레임 (튀어 오를 시간)
+  STAR_REACH: 24     // 공 중심과 별 중심이 이 거리 안이면 먹음
+};
+const TILE = 40, COLS = 24, ROWS = 13;
+const VIEW_W = 960, VIEW_H = 540;
+const MAP_Y = VIEW_H - ROWS * TILE;     // 20px: 맵(520px)을 화면 아래에 붙이고 남는 위쪽 띠
+const SOLID = new Set(['#', 'J', 'C', '<', '>']);
+const EPS = 1e-6;
+
+const COLORS = {
+  block: '#3b4a8c', blockTop: '#7fd1ff',
+  jump: '#e8833a', jumpTop: '#ffd28a',
+  crumble: '#9a6a43', crumbleTop: '#e0b07a',
+  dash: '#1fa99c', dashTop: '#a8fff4',
+  spike: '#ff4d6d', portal: '#b388ff',
+  star: '#ffd166', ball: '#ff7aa8', ballLight: '#ffd6e5'
+};
+
+/* ───────── 2. 스테이지 ─────────
+   . 빈칸  # 블록  * 별  P 시작  ^ 가시  J 점프  C 깨짐  < > 대시  O 순간이동(2개씩 짝)
+   가로 24 × 세로 13. 모든 별이 먹을 수 있는지는 tools/verify-stages.js로 확인한다. */
+const STAGES = [
+  { name: '첫 바운스', hint: '← → (또는 A D)로 움직여 별을 모두 모으세요', map: `
+........................
+........................
+........................
+........................
+..........*.............
+........................
+........###.............
+...*................*...
+........................
+..###.........#####.....
+........................
+.P......................
+#####.....######....####` },
+  { name: '계단 오르기', hint: '블록 옆에서 튀어 올라 한 층씩 올라가요', map: `
+........................
+........................
+....................*...
+........................
+..................####..
+..........*.............
+..............###.......
+........................
+.........###............
+...*....................
+.....###................
+.P......................
+########################` },
+  { name: '징검다리', hint: '구멍에 빠지면 처음부터예요', map: `
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+.....*.....*......*.....
+........................
+......................*.
+.P......................
+####...###...###....####` },
+  { name: '가시 조심', hint: '빨간 가시에 닿으면 실패!', map: `
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+......*.......*.....*...
+........................
+........................
+.P...^^......^^^...^^...
+########################` },
+  { name: '점프 블록', hint: '주황 블록은 훨씬 높이 튀어요', map: `
+........................
+...................*....
+.................#####..
+........................
+...........*.*..........
+........................
+.........#####J.........
+........................
+........................
+........................
+...................*....
+.P....J.................
+########################` },
+  { name: '무너지는 다리', hint: '갈색 블록은 한 번 밟으면 무너져요', map: `
+........................
+........................
+........................
+........................
+................*.......
+........................
+........................
+........................
+.................CC.....
+........................
+.....*....*.........CC..
+.P......................
+###CCC#CCC#CCCCCC#######` },
+  { name: '하늘 다리', hint: '점프 블록으로 올라가 다리를 건너요', map: `
+........................
+.....................*..
+...................####.
+........................
+........................
+........*...*...*.......
+........................
+......###CCCCCC##J......
+........................
+........................
+......................*.
+.P..J..^^^^^^^^^^^^.....
+########################` },
+  { name: '가시 위의 탑', hint: '깨지는 발판을 한 번씩만 밟고 올라가요', map: `
+........................
+........*...............
+..................*.....
+........CC..CC..........
+.................##.....
+........................
+..........*...CC........
+........................
+......*..CC.............
+........................
+.....CC.................
+.P..^^^^^^^^^^^^^^^^^^^^
+########################` },
+  { name: '대시!', hint: '화살표 블록을 밟으면 벽에 닿을 때까지 날아가요', map: `
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+.*......................
+.....................*..
+#...........*...........
+##.................<##..
+...P......*...........#.
+####>.............######` },
+  { name: '순간이동', hint: '보라색 문에 들어가면 짝꿍 문으로 나와요', map: `
+........................
+....*.......*.......*...
+..................O.....
+..#####..CCCCCCCC######.
+........................
+........................
+........................
+........................
+........................
+....*...................
+........................
+.P.....O.^^^^^^^^^^^^^^^
+########################` }
+];
+
+/* ───────── 3. Level: 맵 문자열 → 블록/별/시작점 ───────── */
+class Level {
+  constructor(stage) {
+    this.stage = stage;
+    this.rows = Level.parse(stage);
+    this.reset();
+  }
+
+  // 맵이 규칙(24×13, P 하나, O 짝수)을 어기면 바로 알려 준다 (잘못된 맵을 조용히 넘기지 않기)
+  static parse(stage) {
+    const rows = stage.map.trim().split('\n').map(s => s.trim());
+    const bad = msg => { throw new Error(`스테이지 "${stage.name}": ${msg}`); };
+    if (rows.length !== ROWS) bad(`세로 ${rows.length}줄 (필요: ${ROWS})`);
+    rows.forEach((r, i) => { if (r.length !== COLS) bad(`${i}번째 줄 길이 ${r.length} (필요: ${COLS})`); });
+    const all = rows.join('');
+    if (/[^.#*P^JC<>O]/.test(all)) bad('모르는 글자가 있음');
+    if ((all.match(/P/g) || []).length !== 1) bad('시작점 P는 정확히 1개');
+    if ((all.match(/O/g) || []).length % 2) bad('순간이동 O는 2개씩 짝');
+    if (!all.includes('*')) bad('별이 없음');
+    return rows;
+  }
+
+  // 재시작할 때마다 원본 문자열에서 다시 만든다 → 별·깨진 블록이 확실히 원래대로 돌아옴
+  reset() {
+    this.grid = [];
+    this.stars = [];
+    this.portals = [];
+    this.crumbling = new Map();   // key(r*COLS+c) → 남은 프레임
+    this.rows.forEach((line, r) => {
+      const row = [];
+      [...line].forEach((ch, c) => {
+        if (ch === 'P') {
+          this.spawn = { x: c * TILE + TILE / 2, y: (r + 1) * TILE - PHYS.BALL_R };
+          row.push('.');
+        } else if (ch === '*') {
+          this.stars.push({ x: c * TILE + TILE / 2, y: r * TILE + TILE / 2, taken: false });
+          row.push('.');
+        } else {
+          if (ch === 'O') this.portals.push({ c, r });
+          row.push(ch);
+        }
+      });
+      this.grid.push(row);
+    });
+  }
+
+  // 맵 밖: 좌우·위는 벽, 아래는 빈칸(떨어지면 실패)
+  tileAt(c, r) {
+    if (c < 0 || c >= COLS || r < 0) return '#';
+    if (r >= ROWS) return '.';
+    return this.grid[r][c];
+  }
+
+  // 사각형과 겹치는 단단한 블록 목록
+  solidsIn(left, top, right, bottom) {
+    const hits = [];
+    const c0 = Math.floor(left / TILE), c1 = Math.floor((right - EPS) / TILE);
+    const r0 = Math.floor(top / TILE), r1 = Math.floor((bottom - EPS) / TILE);
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const ch = this.tileAt(c, r);
+        if (SOLID.has(ch)) hits.push({ c, r, ch });
+      }
+    }
+    return hits;
+  }
+
+  startCrumble(c, r) {
+    const key = r * COLS + c;
+    if (!this.crumbling.has(key)) this.crumbling.set(key, PHYS.CRUMBLE_DELAY);
+  }
+
+  update(events) {
+    for (const [key, t] of this.crumbling) {
+      if (t <= 1) {
+        const r = Math.floor(key / COLS), c = key % COLS;
+        this.grid[r][c] = '.';
+        this.crumbling.delete(key);
+        events.push({ type: 'crumble', x: c * TILE + TILE / 2, y: r * TILE + TILE / 2 });
+      } else {
+        this.crumbling.set(key, t - 1);
+      }
+    }
+  }
+
+  // O는 맵에 나온 순서대로 (0↔1), (2↔3) … 짝을 이룬다
+  portalPair(c, r) {
+    const i = this.portals.findIndex(p => p.c === c && p.r === r);
+    if (i < 0) return null;
+    return this.portals[i % 2 === 0 ? i + 1 : i - 1] || null;
+  }
+
+  get starsLeft() { return this.stars.reduce((n, s) => n + (s.taken ? 0 : 1), 0); }
+
+  draw(ctx, time) {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const ch = this.grid[r][c];
+        if (ch === '.') continue;
+        drawTile(ctx, ch, c * TILE, r * TILE, time, this.crumbling.get(r * COLS + c));
+      }
+    }
+    for (const s of this.stars) {
+      if (s.taken) continue;
+      const bob = Math.sin(time / 300 + s.x * 0.05) * 3;
+      ctx.save();
+      ctx.shadowColor = COLORS.star;
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = COLORS.star;
+      drawStarShape(ctx, s.x, s.y + bob, 14, 6, time / 900);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+}
+
+/* ───────── 4. Ball ───────── */
+class Ball {
+  constructor(x, y) {
+    this.x = x; this.y = y;      // 중심 좌표
+    this.vx = 0; this.vy = 0;
+    this.dash = 0;               // 대시 중이면 -1 / +1
+    this.portalLock = null;      // 방금 도착한 문 위에서 다시 빨려 들어가지 않게
+    this.squash = 0;             // 튈 때 납작해지는 정도 (그리기용)
+  }
+
+  update(level, dir, events) {
+    if (this.dash) {
+      // 대시 중: 중력 없이 수평으로 직진, 입력 무시 (벽에 닿으면 끝)
+      this.vx = this.dash * PHYS.DASH_V;
+      this.vy = 0;
+    } else {
+      if (dir) this.vx += dir * PHYS.MOVE_ACC;
+      else this.vx *= PHYS.FRICTION;
+      if (Math.abs(this.vx) < 0.05) this.vx = 0;
+      this.vx = Math.max(-PHYS.MAX_VX, Math.min(PHYS.MAX_VX, this.vx));
+      this.vy = Math.min(this.vy + PHYS.GRAVITY, PHYS.MAX_FALL);
+    }
+
+    // 왜 나눠서 이동?: 한 프레임 이동량이 공 반지름보다 크면 얇은 블록을 뚫을 수 있어서
+    // 반지름 이하로 쪼개 여러 번 검사한다 (명세서 체크리스트 "빠를 때 뚫지 않는가")
+    const n = Math.max(1, Math.ceil(Math.max(Math.abs(this.vx), Math.abs(this.vy)) / PHYS.BALL_R));
+    const sx = this.vx / n, sy = this.vy / n;
+    let xStop = false, yStop = false;
+    for (let i = 0; i < n; i++) {
+      if (!xStop) xStop = moveX(this, level, sx, events);
+      if (!yStop) yStop = moveY(this, level, sy, events);
+    }
+    this.squash *= 0.82;
+  }
+
+  draw(ctx) {
+    const R = PHYS.BALL_R;
+    let sx, sy;
+    if (this.dash) { sx = 1.35; sy = 0.75; }
+    else {
+      sx = 1 + 0.35 * this.squash;
+      sy = 1 - 0.35 * this.squash;
+      const stretch = Math.min(Math.abs(this.vy) / 45, 0.18) * (1 - this.squash);
+      sy *= 1 + stretch; sx *= 1 - stretch;
+    }
+    ctx.save();
+    ctx.translate(this.x, this.y + R);   // 아래쪽을 기준으로 찌그러뜨려야 바닥에 붙어 보임
+    ctx.scale(sx, sy);
+    ctx.fillStyle = COLORS.ball;
+    ctx.beginPath(); ctx.arc(0, -R, R, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = COLORS.ballLight;
+    ctx.beginPath(); ctx.arc(-3.2, -R - 3.2, 3.4, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* ───────── 5. 충돌: X 먼저, 그다음 Y ─────────
+   왜 축을 나누나: 대각선으로 한 번에 움직이고 검사하면 "벽에 부딪힌 건지 바닥에 닿은 건지"
+   구분이 안 돼서 벽에 달라붙거나 블록을 뚫는 버그가 생긴다.
+   공은 지름×지름 사각형으로 본다 (원 충돌보다 단순하고 체감 차이는 거의 없음). */
+function moveX(ball, level, dx, events) {
+  if (dx === 0) return false;
+  const R = PHYS.BALL_R;
+  ball.x += dx;
+  const hits = level.solidsIn(ball.x - R, ball.y - R, ball.x + R, ball.y + R);
+  if (!hits.length) return false;
+  if (dx > 0) ball.x = Math.min(...hits.map(h => h.c)) * TILE - R;
+  else ball.x = (Math.max(...hits.map(h => h.c)) + 1) * TILE + R;
+  ball.vx = 0;
+  if (ball.dash) { ball.dash = 0; events.push({ type: 'wall', x: ball.x, y: ball.y }); }
+  return true;
+}
+
+function moveY(ball, level, dy, events) {
+  if (dy === 0) return false;
+  const R = PHYS.BALL_R;
+  ball.y += dy;
+  const hits = level.solidsIn(ball.x - R, ball.y - R, ball.x + R, ball.y + R);
+  if (!hits.length) return false;
+
+  if (dy < 0) {
+    // 머리를 박음 → 위로 가던 힘만 없앤다
+    ball.y = (Math.max(...hits.map(h => h.r)) + 1) * TILE + R;
+    ball.vy = 0;
+    return true;
+  }
+
+  // 떨어지다 블록 윗면에 닿았을 때만 "튐" (블록 종류별 속도)
+  const row = Math.min(...hits.map(h => h.r));
+  ball.y = row * TILE - R;
+  const under = hits.filter(h => h.r === row);
+  const centerCol = Math.floor(ball.x / TILE);
+  const main = under.find(h => h.c === centerCol) || under[0];
+  under.forEach(h => { if (h.ch === 'C') level.startCrumble(h.c, h.r); });
+  ball.squash = 1;
+
+  if (under.some(h => h.ch === 'J')) {
+    ball.vy = PHYS.JUMP_V;
+    events.push({ type: 'jump', x: ball.x, y: ball.y + R });
+  } else if (main.ch === '<' || main.ch === '>') {
+    // 공 중심 아래가 대시 블록일 때만 발동 (모서리를 살짝 밟았을 때 오작동 방지)
+    ball.dash = main.ch === '>' ? 1 : -1;
+    ball.vx = ball.dash * PHYS.DASH_V;
+    ball.vy = 0;
+    events.push({ type: 'dash', x: ball.x, y: ball.y + R, dir: ball.dash });
+  } else {
+    ball.vy = PHYS.BOUNCE_V;
+    events.push({ type: 'bounce', x: ball.x, y: ball.y + R });
+  }
+  return true;
+}
+
+/* ───────── 한 판(월드): 레벨 + 공 + 결과 ───────── */
+function createWorld(index) {
+  const level = new Level(STAGES[index]);
+  return { index, level, ball: new Ball(level.spawn.x, level.spawn.y), status: 'playing', frame: 0 };
+}
+
+function resetWorld(world) {
+  world.level.reset();
+  world.ball = new Ball(world.level.spawn.x, world.level.spawn.y);
+  world.status = 'playing';
+  world.frame = 0;
+}
+
+// 고정 1/60초 한 칸 진행. 화면 효과·소리는 반환된 events를 보고 바깥에서 처리한다.
+function stepWorld(world, dir) {
+  const events = [];
+  if (world.status !== 'playing') return events;
+  world.frame++;
+  world.ball.update(world.level, dir, events);
+  world.level.update(events);
+  checkContacts(world, events);
+  return events;
+}
+
+function checkContacts(world, events) {
+  const { level, ball } = world;
+  const R = PHYS.BALL_R;
+
+  // 화면 아래로 떨어짐
+  if (ball.y - R > ROWS * TILE) {
+    world.status = 'dead';
+    events.push({ type: 'die', x: ball.x, y: ROWS * TILE - 10 });
+    return;
+  }
+
+  // 가시: 칸 전체가 아니라 뾰족한 부분 근처만 판정 (억울한 죽음 줄이기)
+  const l = ball.x - R + 2, r = ball.x + R - 2, t = ball.y - R + 2, b = ball.y + R - 2;
+  for (let row = Math.floor(t / TILE); row <= Math.floor(b / TILE); row++) {
+    for (let col = Math.floor(l / TILE); col <= Math.floor(r / TILE); col++) {
+      if (level.tileAt(col, row) !== '^') continue;
+      const sl = col * TILE + 6, sr = col * TILE + 34, st = row * TILE + 18, sb = row * TILE + 40;
+      if (l < sr && r > sl && t < sb && b > st) {
+        world.status = 'dead';
+        events.push({ type: 'die', x: ball.x, y: ball.y });
+        return;
+      }
+    }
+  }
+
+  // 별
+  for (const s of level.stars) {
+    if (s.taken) continue;
+    const dx = s.x - ball.x, dy = s.y - ball.y;
+    if (dx * dx + dy * dy < PHYS.STAR_REACH * PHYS.STAR_REACH) {
+      s.taken = true;
+      events.push({ type: 'star', x: s.x, y: s.y });
+    }
+  }
+
+  // 순간이동: 공 중심이 O 칸에 들어가면 짝꿍 O 칸 중심으로
+  const c = Math.floor(ball.x / TILE), rr = Math.floor(ball.y / TILE);
+  if (ball.portalLock && (ball.portalLock.c !== c || ball.portalLock.r !== rr)) ball.portalLock = null;
+  if (!ball.portalLock && level.tileAt(c, rr) === 'O') {
+    const to = level.portalPair(c, rr);
+    if (to) {
+      events.push({ type: 'teleport', x: ball.x, y: ball.y });
+      ball.x = to.c * TILE + TILE / 2;
+      ball.y = to.r * TILE + TILE / 2;
+      ball.dash = 0;
+      ball.portalLock = { c: to.c, r: to.r };
+      events.push({ type: 'teleport', x: ball.x, y: ball.y });
+    }
+  }
+
+  if (level.starsLeft === 0) {
+    world.status = 'clear';
+    events.push({ type: 'clear', x: ball.x, y: ball.y });
+  }
+}
+
+/* ───────── 도형 그리기 (이미지 파일 없이 도형만) ───────── */
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawStarShape(ctx, x, y, outer, inner, rot) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rad = i % 2 ? inner : outer;
+    const a = rot + (i * Math.PI) / 5 - Math.PI / 2;
+    ctx.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad);
+  }
+  ctx.closePath();
+}
+
+function drawBlock(ctx, x, y, body, top) {
+  ctx.fillStyle = body;
+  roundRect(ctx, x + 1, y + 1, TILE - 2, TILE - 2, 6);
+  ctx.fill();
+  ctx.fillStyle = top;
+  roundRect(ctx, x + 3, y + 2, TILE - 6, 6, 3);
+  ctx.fill();
+}
+
+function drawTile(ctx, ch, x, y, time, crumbleLeft) {
+  switch (ch) {
+    case '#':
+      drawBlock(ctx, x, y, COLORS.block, COLORS.blockTop);
+      break;
+    case 'J': {
+      drawBlock(ctx, x, y, COLORS.jump, COLORS.jumpTop);
+      ctx.strokeStyle = COLORS.jumpTop; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      for (const oy of [16, 26]) {
+        ctx.beginPath(); ctx.moveTo(x + 12, y + oy + 5); ctx.lineTo(x + 20, y + oy - 2); ctx.lineTo(x + 28, y + oy + 5); ctx.stroke();
+      }
+      break;
+    }
+    case 'C': {
+      ctx.save();
+      if (crumbleLeft !== undefined) {
+        // 무너지기 직전: 흔들리며 흐려짐
+        ctx.translate(Math.sin(time * 0.09) * 2, 0);
+        ctx.globalAlpha = Math.max(0.25, crumbleLeft / PHYS.CRUMBLE_DELAY);
+      }
+      drawBlock(ctx, x, y, COLORS.crumble, COLORS.crumbleTop);
+      ctx.strokeStyle = 'rgba(40, 20, 5, 0.6)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x + 10, y + 12); ctx.lineTo(x + 18, y + 22); ctx.lineTo(x + 14, y + 32);
+      ctx.moveTo(x + 18, y + 22); ctx.lineTo(x + 30, y + 26); ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    case '<': case '>': {
+      drawBlock(ctx, x, y, COLORS.dash, COLORS.dashTop);
+      const d = ch === '>' ? 1 : -1;
+      const shift = ((time / 120) % 6) * d;
+      ctx.fillStyle = COLORS.dashTop;
+      ctx.beginPath();
+      ctx.moveTo(x + 20 + d * 10 + shift, y + 23);
+      ctx.lineTo(x + 20 - d * 6 + shift, y + 14);
+      ctx.lineTo(x + 20 - d * 6 + shift, y + 32);
+      ctx.closePath(); ctx.fill();
+      break;
+    }
+    case '^':
+      ctx.fillStyle = COLORS.spike;
+      ctx.beginPath();
+      ctx.moveTo(x + 2, y + 40); ctx.lineTo(x + 11, y + 16); ctx.lineTo(x + 20, y + 40);
+      ctx.moveTo(x + 20, y + 40); ctx.lineTo(x + 29, y + 16); ctx.lineTo(x + 38, y + 40);
+      ctx.fill();
+      break;
+    case 'O': {
+      ctx.save();
+      ctx.translate(x + 20, y + 20);
+      ctx.strokeStyle = COLORS.portal; ctx.lineWidth = 3;
+      ctx.shadowColor = COLORS.portal; ctx.shadowBlur = 12;
+      ctx.setLineDash([7, 5]);
+      ctx.lineDashOffset = -time / 40;
+      ctx.beginPath(); ctx.ellipse(0, 0, 14, 17, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(179, 136, 255, 0.25)';
+      ctx.beginPath(); ctx.ellipse(0, 0, 9, 12, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      break;
+    }
+  }
+}
+// ==SIM END==
+
+/* ───────── 6. 저장/불러오기 ─────────
+   왜 try/catch?: 시크릿 창·저장 공간 차단 환경에서는 localStorage 접근 자체가 에러를 던진다.
+   그때도 게임은 돌아가야 하므로 실패하면 "저장 없음"으로 조용히 넘어간다. */
+const SAVE_KEY = 'bouncy-star.v1';
+const save = {
+  load() {
+    try {
+      const data = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
+      return { cleared: new Set(Array.isArray(data.cleared) ? data.cleared : []), muted: !!data.muted };
+    } catch (e) {
+      return { cleared: new Set(), muted: false };
+    }
+  },
+  write(progress) {
+    try {
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ cleared: [...progress.cleared], muted: progress.muted }));
+    } catch (e) { /* 저장 못 해도 게임은 계속 */ }
+  }
+};
+const progress = save.load();
+const isUnlocked = i => i === 0 || progress.cleared.has(i - 1) || progress.cleared.has(i);
+
+/* ───────── 7. 효과음: Web Audio로 직접 생성 (소리 파일 없음) ───────── */
+const sound = (() => {
+  let ac = null;
+  function ctx() {
+    if (!ac) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      ac = new AC();
+    }
+    if (ac.state === 'suspended') ac.resume();
+    return ac;
+  }
+  function tone(freq, dur, type, vol, slideTo, delay = 0) {
+    if (progress.muted) return;
+    const c = ctx(); if (!c) return;
+    const t0 = c.currentTime + delay;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t0);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g).connect(c.destination);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+  return {
+    unlock: ctx,
+    bounce: () => tone(300, 0.07, 'sine', 0.05, 200),
+    jump: () => tone(260, 0.25, 'triangle', 0.1, 820),
+    dash: () => tone(500, 0.2, 'sawtooth', 0.05, 1200),
+    star: () => { tone(880, 0.08, 'square', 0.05); tone(1320, 0.14, 'square', 0.05, null, 0.06); },
+    crumble: () => tone(140, 0.12, 'square', 0.05, 70),
+    teleport: () => tone(400, 0.3, 'sine', 0.08, 1600),
+    die: () => tone(280, 0.35, 'sawtooth', 0.07, 60),
+    clear: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.2, 'triangle', 0.09, null, i * 0.09))
+  };
+})();
+
+/* ───────── 8. 화면 효과: 파티클·잔상·흔들림 ───────── */
+const fx = {
+  particles: [], trail: [], shake: 0, flash: 0,
+  burst(x, y, color, count, speed, size = 3) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2, s = speed * (0.4 + Math.random() * 0.6);
+      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1, decay: 0.025 + Math.random() * 0.03, color, size: size * (0.6 + Math.random() * 0.6) });
+    }
+  },
+  clear() { this.particles = []; this.trail = []; this.shake = 0; this.flash = 0; },
+  update() {
+    for (const p of this.particles) { p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.vx *= 0.97; p.life -= p.decay; }
+    this.particles = this.particles.filter(p => p.life > 0);
+    this.shake *= 0.85;
+    this.flash *= 0.9;
+  },
+  draw(ctx) {
+    for (const p of this.particles) {
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+  }
+};
+
+function handleEvents(events) {
+  for (const e of events) {
+    switch (e.type) {
+      case 'bounce': fx.burst(e.x, e.y, COLORS.blockTop, 3, 1.5, 2.5); sound.bounce(); break;
+      case 'jump': fx.burst(e.x, e.y, COLORS.jumpTop, 12, 3); sound.jump(); break;
+      case 'dash': fx.burst(e.x, e.y - 8, COLORS.dashTop, 12, 3); sound.dash(); break;
+      case 'wall': fx.burst(e.x, e.y, COLORS.dashTop, 6, 2); break;
+      case 'star': fx.burst(e.x, e.y, COLORS.star, 16, 3.5); sound.star(); break;
+      case 'crumble': fx.burst(e.x, e.y, COLORS.crumbleTop, 10, 2.5, 4); sound.crumble(); break;
+      case 'teleport': fx.burst(e.x, e.y, COLORS.portal, 14, 3); sound.teleport(); break;
+      case 'die': fx.burst(e.x, e.y, COLORS.spike, 26, 4.5); fx.shake = 10; fx.flash = 0.5; sound.die(); break;
+      case 'clear': fx.burst(e.x, e.y, COLORS.star, 40, 5); sound.clear(); break;
+    }
+  }
+}
+
+/* ───────── 9. 입력 (키보드 + 터치) ───────── */
+const keys = { left: false, right: false };
+const touches = new Map();   // pointerId → -1(왼쪽 절반) / +1(오른쪽 절반)
+
+function inputDir() {
+  let left = keys.left, right = keys.right;
+  for (const side of touches.values()) { if (side < 0) left = true; else right = true; }
+  return (right ? 1 : 0) - (left ? 1 : 0);
+}
+
+const KEY_LEFT = new Set(['ArrowLeft', 'KeyA']);
+const KEY_RIGHT = new Set(['ArrowRight', 'KeyD']);
+
+window.addEventListener('keydown', e => {
+  sound.unlock();
+  if (KEY_LEFT.has(e.code)) { keys.left = true; e.preventDefault(); }
+  else if (KEY_RIGHT.has(e.code)) { keys.right = true; e.preventDefault(); }
+  else if (e.code === 'KeyR' && (state === 'play' || state === 'pause')) restartStage();
+  else if (e.code === 'Escape' || e.code === 'KeyP') {
+    if (state === 'play') setState('pause');
+    else if (state === 'pause') setState('play');
+  }
+  else if (e.code === 'KeyM') toggleMute();
+});
+window.addEventListener('keyup', e => {
+  if (KEY_LEFT.has(e.code)) keys.left = false;
+  if (KEY_RIGHT.has(e.code)) keys.right = false;
+});
+// 창이 포커스를 잃으면 keyup이 안 와서 키가 눌린 채로 남는 문제 방지
+window.addEventListener('blur', () => { keys.left = keys.right = false; touches.clear(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'play') setState('pause'); });
+
+const canvas = document.getElementById('game');
+// 왜 캔버스가 아니라 화면 전체?: 세로 모바일에선 캔버스 위아래 여백이 넓어서,
+// 여백을 눌러도 조작되는 편이 손가락이 게임 화면을 가리지 않아 더 편하다.
+const touchSide = e => (e.clientX < window.innerWidth / 2 ? -1 : 1);
+document.addEventListener('pointerdown', e => {
+  sound.unlock();
+  if (state !== 'play' || e.target.closest('button')) return;
+  touches.set(e.pointerId, touchSide(e));
+});
+document.addEventListener('pointermove', e => { if (touches.has(e.pointerId)) touches.set(e.pointerId, touchSide(e)); });
+for (const type of ['pointerup', 'pointercancel']) {
+  document.addEventListener(type, e => touches.delete(e.pointerId));
+}
+
+/* ───────── 10. 게임 상태 ─────────
+   왜 문자열 하나로?: "지금 어떤 화면인지"를 이 변수 하나만 보면 알 수 있어서 화면 전환 버그가 줄어든다. */
+let state = 'title';            // 'title' | 'select' | 'play' | 'pause' | 'clear' | 'end'
+let world = null;
+let attempts = 1;
+let totalAttempts = 0;
+let deadTimer = 0, clearTimer = 0;
+const demo = createWorld(0);    // 타이틀 뒤에서 혼자 통통 튀는 배경용
+
+const $ = id => document.getElementById(id);
+const screens = { title: $('screen-title'), select: $('screen-select'), pause: $('screen-pause'), clear: $('screen-clear'), end: $('screen-end') };
+
+function setState(next) {
+  state = next;
+  for (const [name, el] of Object.entries(screens)) el.hidden = name !== next;
+  $('corner').hidden = next !== 'play';
+  if (next === 'select') buildSelect();
+  if (next !== 'play') { keys.left = keys.right = false; touches.clear(); }
+  const focusTarget = { title: 'btn-start', pause: 'btn-resume', clear: 'btn-next', end: 'btn-end-select' }[next];
+  if (focusTarget) $(focusTarget).focus();
+  if (next === 'play') canvas.focus?.();
+}
+
+function startStage(index) {
+  world = createWorld(index);
+  attempts = 1;
+  deadTimer = clearTimer = 0;
+  fx.clear();
+  setState('play');
+}
+
+function restartStage() {
+  if (!world) return;
+  resetWorld(world);
+  attempts++;
+  totalAttempts++;
+  deadTimer = clearTimer = 0;
+  fx.clear();
+  if (state === 'pause') setState('play');
+}
+
+function onStageClear() {
+  progress.cleared.add(world.index);
+  save.write(progress);
+  const last = world.index === STAGES.length - 1;
+  if (last && progress.cleared.size === STAGES.length) {
+    $('end-detail').textContent = `${STAGES.length}개 스테이지를 모두 클리어했어요.`;
+    setState('end');
+    return;
+  }
+  $('clear-title').textContent = `Stage ${world.index + 1} 클리어!`;
+  $('clear-detail').textContent = `${attempts}번째 시도에서 성공`;
+  $('btn-next').hidden = last;
+  setState('clear');
+  if (last) $('btn-clear-select').focus();
+}
+
+function firstUncleared() {
+  for (let i = 0; i < STAGES.length; i++) if (!progress.cleared.has(i)) return i;
+  return 0;
+}
+
+function buildSelect() {
+  const grid = $('stage-grid');
+  grid.innerHTML = '';
+  STAGES.forEach((s, i) => {
+    const b = document.createElement('button');
+    const open = isUnlocked(i);
+    b.disabled = !open;
+    if (progress.cleared.has(i)) b.classList.add('cleared');
+    b.innerHTML = `<span class="num">${open ? i + 1 : '🔒'}${progress.cleared.has(i) ? ' ★' : ''}</span><span class="name"></span>`;
+    b.querySelector('.name').textContent = s.name;
+    b.addEventListener('click', () => startStage(i));
+    grid.appendChild(b);
+  });
+  grid.querySelector('button:not(:disabled)')?.focus();
+}
+
+function toggleMute() {
+  progress.muted = !progress.muted;
+  save.write(progress);
+  $('btn-mute').textContent = progress.muted ? '✕' : '♪';
+  $('btn-mute').setAttribute('aria-label', progress.muted ? '소리 켜기' : '소리 끄기');
+}
+
+$('btn-start').addEventListener('click', () => startStage(firstUncleared()));
+$('btn-open-select').addEventListener('click', () => setState('select'));
+$('btn-select-back').addEventListener('click', () => setState('title'));
+$('btn-pause').addEventListener('click', () => setState('pause'));
+$('btn-mute').addEventListener('click', toggleMute);
+$('btn-resume').addEventListener('click', () => setState('play'));
+$('btn-pause-restart').addEventListener('click', restartStage);
+$('btn-pause-select').addEventListener('click', () => setState('select'));
+$('btn-next').addEventListener('click', () => startStage(world.index + 1));
+$('btn-retry').addEventListener('click', () => startStage(world.index));
+$('btn-clear-select').addEventListener('click', () => setState('select'));
+$('btn-end-select').addEventListener('click', () => setState('select'));
+$('btn-end-title').addEventListener('click', () => setState('title'));
+if (progress.muted) { progress.muted = false; toggleMute(); }
+
+/* ───────── 11. 게임 루프: 물리는 고정 1/60초, 그리기는 화면 주사율대로 ─────────
+   왜?: 144Hz 모니터에서 requestAnimationFrame이 1초에 144번 불려도
+   물리는 정확히 1초에 60번만 계산되므로 공 속도가 모든 모니터에서 같다. */
+const STEP_MS = 1000 / 60;
+let acc = 0, last = performance.now();
+
+function update() {
+  if (state === 'pause') return;           // 일시정지: 아무것도 진행하지 않음
+  fx.update();
+
+  if (state !== 'play' && state !== 'clear') {
+    stepWorld(demo, 0);
+    if (demo.status !== 'playing') resetWorld(demo);
+    return;
+  }
+  if (!world) return;
+
+  if (world.status === 'playing') {
+    const events = stepWorld(world, state === 'play' ? inputDir() : 0);
+    handleEvents(events);
+    fx.trail.push({ x: world.ball.x, y: world.ball.y });
+    if (fx.trail.length > 8) fx.trail.shift();
+    if (world.status === 'dead') deadTimer = 40;
+    if (world.status === 'clear') clearTimer = 50;
+  } else if (world.status === 'dead' && --deadTimer <= 0) {
+    restartStage();                        // 실패 → 같은 스테이지 처음부터 (별·블록 원상복구)
+  } else if (world.status === 'clear' && state === 'play' && --clearTimer <= 0) {
+    onStageClear();
+  }
+}
+
+/* ───────── 12. 그리기 ───────── */
+const ctx = canvas.getContext('2d');
+let bgCanvas = null;
+
+// 배경은 매 프레임 같으므로 한 번만 그려 두고 복사한다
+function buildBackground() {
+  bgCanvas = document.createElement('canvas');
+  bgCanvas.width = VIEW_W; bgCanvas.height = VIEW_H;
+  const b = bgCanvas.getContext('2d');
+  const g = b.createLinearGradient(0, 0, 0, VIEW_H);
+  g.addColorStop(0, '#161d44'); g.addColorStop(1, '#0a0d20');
+  b.fillStyle = g; b.fillRect(0, 0, VIEW_W, VIEW_H);
+  b.strokeStyle = 'rgba(255,255,255,0.035)'; b.lineWidth = 1;
+  for (let x = 0; x <= VIEW_W; x += TILE) { b.beginPath(); b.moveTo(x + 0.5, MAP_Y); b.lineTo(x + 0.5, VIEW_H); b.stroke(); }
+  for (let y = MAP_Y; y <= VIEW_H; y += TILE) { b.beginPath(); b.moveTo(0, y + 0.5); b.lineTo(VIEW_W, y + 0.5); b.stroke(); }
+  let seed = 7;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  b.fillStyle = 'rgba(255,255,255,0.5)';
+  for (let i = 0; i < 60; i++) b.fillRect(rand() * VIEW_W, rand() * VIEW_H * 0.7, 1.5, 1.5);
+}
+
+// 화면 크기에 맞춰 캔버스 실제 픽셀 수를 바꾼다 (논리 크기 960×540은 그대로, 선명도만 맞춤)
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.max(1, Math.round(canvas.clientWidth * dpr));
+  canvas.height = Math.max(1, Math.round(canvas.clientHeight * dpr));
+}
+window.addEventListener('resize', resize);
+
+function drawHud(time) {
+  const text = `Stage ${world.index + 1} · ★ ${world.level.stars.length - world.level.starsLeft}/${world.level.stars.length} · 시도 ${attempts}회`;
+  ctx.font = '600 16px system-ui, "Malgun Gothic", sans-serif';
+  const w = ctx.measureText(text).width + 24;
+  ctx.fillStyle = 'rgba(10, 13, 32, 0.7)';
+  roundRect(ctx, 8, 4, w, 26, 13); ctx.fill();
+  ctx.fillStyle = '#eef1ff';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 20, 17);
+
+  // 스테이지 시작 후 약 4초 동안 힌트
+  const f = world.frame;
+  if (f < 240 && state === 'play') {
+    const alpha = Math.min(1, (240 - f) / 40);
+    ctx.globalAlpha = alpha * 0.9;
+    ctx.font = '600 18px system-ui, "Malgun Gothic", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd166';
+    ctx.fillText(`${world.level.stage.name} — ${world.level.stage.hint}`, VIEW_W / 2, MAP_Y + 70);
+    ctx.textAlign = 'left';
+    ctx.globalAlpha = 1;
+  }
+}
+
+function render(time) {
+  const sx = canvas.width / VIEW_W, sy = canvas.height / VIEW_H;
+  ctx.setTransform(sx, 0, 0, sy, 0, 0);
+  if (!bgCanvas) buildBackground();
+  ctx.drawImage(bgCanvas, 0, 0);
+
+  const playing = world && (state === 'play' || state === 'pause' || state === 'clear');
+  const w = playing ? world : demo;
+
+  ctx.save();
+  if (fx.shake > 0.5) ctx.translate((Math.random() - 0.5) * fx.shake, (Math.random() - 0.5) * fx.shake);
+  ctx.translate(0, MAP_Y);
+  if (!playing) ctx.globalAlpha = 0.45;
+  w.level.draw(ctx, time);
+  if (playing && w.status === 'playing') {
+    fx.trail.forEach((p, i) => {
+      ctx.globalAlpha = (i / fx.trail.length) * 0.25;
+      ctx.fillStyle = COLORS.ball;
+      ctx.beginPath(); ctx.arc(p.x, p.y, PHYS.BALL_R * (0.5 + i / 16), 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+  }
+  if (w.status !== 'dead') w.ball.draw(ctx);
+  ctx.globalAlpha = 1;
+  if (playing) fx.draw(ctx);
+  ctx.restore();
+
+  if (fx.flash > 0.02) {
+    ctx.fillStyle = `rgba(255, 77, 109, ${fx.flash * 0.35})`;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  }
+  if (playing) drawHud(time);
+}
+
+function frame(now) {
+  let dt = now - last;
+  last = now;
+  if (dt > 250) dt = 250;   // 탭이 잠깐 멈췄다 돌아왔을 때 물리를 한꺼번에 몰아 계산하지 않게
+  if (dt < 0) dt = 0;       // 시간이 거꾸로 오면(드문 브라우저 버그) 물리가 멈추지 않게
+  acc += dt;
+  while (acc >= STEP_MS) { update(); acc -= STEP_MS; }
+  render(now);
+  requestAnimationFrame(frame);
+}
+
+resize();
+setState('title');
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
